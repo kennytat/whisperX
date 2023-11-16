@@ -103,8 +103,8 @@ def load_model(whisper_arch,
         default_vad_options.update(vad_options)
 
     vad_model = load_vad_model(torch.device(device), use_auth_token=None, **default_vad_options)
-
     return FasterWhisperPipeline(
+        whisper_model=whisper_arch,
         model=model,
         vad=vad_model,
         options=default_asr_options,
@@ -187,6 +187,7 @@ class FasterWhisperPipeline(Pipeline):
 
     def __init__(
             self,
+            whisper_model,
             model,
             vad,
             vad_params: dict,
@@ -198,6 +199,7 @@ class FasterWhisperPipeline(Pipeline):
             suppress_numerals: bool = False,
             **kwargs
     ):
+        self.whisper_model = whisper_model
         self.model = model
         self.tokenizer = tokenizer
         self.options = options
@@ -232,7 +234,7 @@ class FasterWhisperPipeline(Pipeline):
 
     def preprocess(self, audio):
         audio = audio['inputs']
-        features = log_mel_spectrogram(audio, padding=N_SAMPLES - audio.shape[0])
+        features = log_mel_spectrogram(audio, n_mels=128 if self.whisper_model.endswith("large-v3") else 80, padding=N_SAMPLES - audio.shape[0])
         return {'inputs': features}
 
     def _forward(self, model_inputs):
@@ -258,7 +260,7 @@ class FasterWhisperPipeline(Pipeline):
         return final_iterator
 
     def transcribe(
-        self, audio: Union[str, np.ndarray], batch_size=None, num_workers=0, language=None, task=None, chunk_size=30, print_progress = False, combined_progress=False
+        self, model_name:str, audio: Union[str, np.ndarray], batch_size=None, num_workers=0, language=None, task=None, chunk_size=30, print_progress = False, combined_progress=False
     ) -> TranscriptionResult:
         if isinstance(audio, str):
             audio = load_audio(audio)
@@ -269,7 +271,6 @@ class FasterWhisperPipeline(Pipeline):
                 f2 = int(seg['end'] * SAMPLE_RATE)
                 # print(f2-f1)
                 yield {'inputs': audio[f1:f2]}
-
         vad_segments = self.vad_model({"waveform": torch.from_numpy(audio).unsqueeze(0), "sample_rate": SAMPLE_RATE})
         vad_segments = merge_chunks(
             vad_segments,
@@ -278,7 +279,7 @@ class FasterWhisperPipeline(Pipeline):
             offset=self._vad_params["vad_offset"],
         )
         if self.tokenizer is None:
-            language = language or self.detect_language(audio)
+            language = language or self.detect_language(audio, n_mels=128 if model_name.endswith("large-v3") else 80)
             task = task or "transcribe"
             self.tokenizer = faster_whisper.tokenizer.Tokenizer(self.model.hf_tokenizer,
                                                                 self.model.model.is_multilingual, task=task,
@@ -329,10 +330,11 @@ class FasterWhisperPipeline(Pipeline):
         return {"segments": segments, "language": language}
 
 
-    def detect_language(self, audio: np.ndarray):
+    def detect_language(self, audio: np.ndarray, n_mels=80):
+
         if audio.shape[0] < N_SAMPLES:
             print("Warning: audio is shorter than 30s, language detection may be inaccurate.")
-        segment = log_mel_spectrogram(audio[: N_SAMPLES],
+        segment = log_mel_spectrogram(audio[: N_SAMPLES], n_mels=n_mels,
                                       padding=0 if audio.shape[0] >= N_SAMPLES else N_SAMPLES - audio.shape[0])
         encoder_output = self.model.encode(segment)
         results = self.model.model.detect_language(encoder_output)

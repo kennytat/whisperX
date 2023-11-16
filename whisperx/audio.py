@@ -97,15 +97,14 @@ def mel_filters(device, n_mels: int = N_MELS) -> torch.Tensor:
     """
     load the mel filterbank matrix for projecting STFT into a Mel spectrogram.
     Allows decoupling librosa dependency; saved using:
-
         np.savez_compressed(
             "mel_filters.npz",
             mel_80=librosa.filters.mel(sr=16000, n_fft=400, n_mels=80),
         )
     """
-    assert n_mels == 80, f"Unsupported n_mels: {n_mels}"
+    assert n_mels == 80 or n_mels == 128, f"Unsupported n_mels: {n_mels}"
     with np.load(
-        os.path.join(os.path.dirname(__file__), "assets", "mel_filters.npz")
+        os.path.join(os.path.dirname(__file__), "assets", f"mel_filters_{n_mels}.npz")
     ) as f:
         return torch.from_numpy(f[f"mel_{n_mels}"]).to(device)
 
